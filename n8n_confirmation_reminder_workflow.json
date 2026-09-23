@@ -1,0 +1,168 @@
+{
+  "name": "Confirmation + Reminder \u2192 NetHunt CRM",
+  "meta": {
+    "description": "Етап 3 воронки: ранкове підтвердження консультації та нагадування за 1 годину. Тригериться зміною статусу картки в NetHunt на 'Записано на консультацію'. Відповідь клієнта в месенджері фіксується назад у CRM без участі менеджера; ескалація на менеджера відбувається тільки якщо клієнт хоче перенести зустріч."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nethunt-lead-scheduled",
+        "options": {}
+      },
+      "name": "Webhook: Лід записано на консультацію",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 300],
+      "notes": "NetHunt викликає цей webhook при зміні статусу картки на 'Записано на консультацію' (via NetHunt Automation/Zapier trigger)."
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "dateTime",
+              "expression": "={{$json.consultation_date}}T08:00:00"
+            }
+          ]
+        }
+      },
+      "name": "Wait: до ранку дня консультації",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "channel": "={{$json.preferred_channel}}",
+        "text": "=Доброго ранку, {{$json.client_name}}! Нагадуємо: сьогодні о {{$json.consultation_time}} у нас консультація. Підтверджуєте участь?"
+      },
+      "name": "Send: Ранкове підтвердження",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [640, 300],
+      "notes": "Той самий вузол дублюється для Viber/WhatsApp гілки через switch за preferred_channel (не показано заради стислості)."
+    },
+    {
+      "parameters": {
+        "amount": 1,
+        "unit": "hours",
+        "rule": {
+          "interval": [
+            {
+              "field": "dateTime",
+              "expression": "={{$json.consultation_date}}T{{$json.consultation_time}}"
+            }
+          ]
+        }
+      },
+      "name": "Wait: за 1 год до зустрічі",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "channel": "={{$json.preferred_channel}}",
+        "text": "=Нагадуємо: зустріч через годину, о {{$json.consultation_time}}. До зв'язку!"
+      },
+      "name": "Send: Нагадування за годину",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1080, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "client-reply"
+      },
+      "name": "Webhook: Відповідь клієнта",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [640, 480],
+      "notes": "Месенджер-провайдер шле сюди вхідне повідомлення клієнта у відповідь на нагадування."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.intent}}",
+              "operation": "equal",
+              "value2": "confirm"
+            }
+          ]
+        }
+      },
+      "name": "IF: клієнт підтвердив?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "resource": "record",
+        "operation": "update",
+        "recordId": "={{$json.crm_record_id}}",
+        "fields": {
+          "Status_Pidtverdzhennya": "Pidtverdzheno_klientom"
+        }
+      },
+      "name": "NetHunt: записати 'Підтверджено'",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1080, 420],
+      "notes": "PATCH https://nethunt.com/api/v1/zapier/records/{recordId} — виконується без менеджера."
+    },
+    {
+      "parameters": {
+        "resource": "record",
+        "operation": "update",
+        "recordId": "={{$json.crm_record_id}}",
+        "fields": {
+          "Status_Pidtverdzhennya": "Potribna_uvaga_menedzhera"
+        }
+      },
+      "name": "NetHunt: позначити 'Потрібна увага менеджера'",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1080, 540]
+    },
+    {
+      "parameters": {
+        "channel": "internal-sales-team",
+        "text": "=Клієнт {{$json.client_name}} хоче перенести/скасувати консультацію о {{$json.consultation_time}}. Потрібна ручна обробка."
+      },
+      "name": "Slack: ескалація менеджеру",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [1300, 540]
+    }
+  ],
+  "connections": {
+    "Webhook: Лід записано на консультацію": {
+      "main": [[{ "node": "Wait: до ранку дня консультації", "type": "main", "index": 0 }]]
+    },
+    "Wait: до ранку дня консультації": {
+      "main": [[{ "node": "Send: Ранкове підтвердження", "type": "main", "index": 0 }]]
+    },
+    "Send: Ранкове підтвердження": {
+      "main": [[{ "node": "Wait: за 1 год до зустрічі", "type": "main", "index": 0 }]]
+    },
+    "Wait: за 1 год до зустрічі": {
+      "main": [[{ "node": "Send: Нагадування за годину", "type": "main", "index": 0 }]]
+    },
+    "Webhook: Відповідь клієнта": {
+      "main": [[{ "node": "IF: клієнт підтвердив?", "type": "main", "index": 0 }]]
+    },
+    "IF: клієнт підтвердив?": {
+      "main": [
+        [{ "node": "NetHunt: записати 'Підтверджено'", "type": "main", "index": 0 }],
+        [{ "node": "NetHunt: позначити 'Потрібна увага менеджера'", "type": "main", "index": 0 }]
+      ]
+    },
+    "NetHunt: позначити 'Потрібна увага менеджера'": {
+      "main": [[{ "node": "Slack: ескалація менеджеру", "type": "main", "index": 0 }]]
+    }
+  }
+}
